@@ -140,10 +140,14 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#FF6B6B}
   </div>
   <div id="kid-quote" style="background:#F8F7F4;border:0.5px dashed #D3D1C7;border-radius:14px;padding:11px;text-align:center;font-size:13px;color:#888780;font-style:italic;margin-bottom:12px"></div>
   <div id="kid-banners"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+    <div class="card" style="text-align:center;padding:10px"><div style="font-size:22px">🔥</div><div style="font-size:20px;font-weight:800;color:#FF6B6B" id="kid-streak">0</div><div class="muted" style="font-size:10px">day streak</div></div>
+    <div class="card" style="text-align:center;padding:10px"><div style="font-size:22px">🤲</div><div style="font-size:20px;font-weight:800;color:#1D9E75" id="kid-solat-streak">0</div><div class="muted" style="font-size:10px">solat streak</div></div>
+  </div>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
-    <div class="card" style="text-align:center;padding:10px"><div style="font-size:22px">🔥</div><div style="font-size:20px;font-weight:800;color:#FF6B6B" id="kid-streak">0</div><div class="muted" style="font-size:10px">streak</div></div>
-    <div class="card" style="text-align:center;padding:10px"><div style="font-size:22px">🤲</div><div style="font-size:20px;font-weight:800;color:#1D9E75" id="kid-solat-streak">0</div><div class="muted" style="font-size:10px">solat</div></div>
-    <div class="card" style="text-align:center;padding:10px"><div style="font-size:22px">⭐</div><div style="font-size:20px;font-weight:800;color:#633806" id="kid-pts">0</div><div class="muted" style="font-size:10px">pts</div></div>
+    <div class="card" style="text-align:center;padding:8px"><div style="font-size:16px">💰</div><div style="font-size:17px;font-weight:800;color:#FF6B6B" id="kid-pts">0</div><div class="muted" style="font-size:9px">balance</div></div>
+    <div class="card" style="text-align:center;padding:8px"><div style="font-size:16px">📅</div><div style="font-size:17px;font-weight:800;color:#7F77DD" id="kid-month-pts">0</div><div class="muted" style="font-size:9px" id="kid-month-label">this month</div></div>
+    <div class="card" style="text-align:center;padding:8px"><div style="font-size:16px">⭐</div><div style="font-size:17px;font-weight:800;color:#633806" id="kid-total-pts">0</div><div class="muted" style="font-size:9px">all time</div></div>
   </div>
   <div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -545,6 +549,19 @@ function getSolatDone(tasks){return SOLAT_NAMES.every(n=>tasks.some(t=>t.t===n&&
 function getSolatLeft(tasks){return SOLAT_NAMES.filter(n=>!tasks.some(t=>t.t===n&&t.done)).length;}
 function getSolatDoneFromSnap(tasks){if(!tasks)return false;return SOLAT_NAMES.every(n=>tasks.some(t=>t.t===n&&t.done));}
 
+// ── TOTAL EARNED CALC ──
+function calcTotalEarned(kidI){
+  const k=S.kids[kidI],hist=k.history||{};
+  // sum all history days
+  const histPts=Object.values(hist).reduce((a,d)=>a+(d.pts||0),0);
+  // add real bonuses (not fixing points)
+  const bonusPts=(S.bonusLog||[]).filter(b=>b.kidIdx===kidI&&b.task!=='Fixing points').reduce((a,b)=>a+b.pts,0);
+  // add today's in-progress pts if not yet in history
+  const today=todayStr();
+  const todayPts=k.lastDate===today?S.tasks[kidI].filter(t=>t.done).reduce((a,t)=>a+t.p,0)+(k.solatBonusToday?10:0):0;
+  return histPts+bonusPts+todayPts;
+}
+
 // ── POINTS PILL ──
 function pill(p){const c=p>=4?'pill-hi':p>=2?'pill-md':p>=1?'pill-lo':'pill-zr';return `<span class="pill ${c}">${p===0?'free':p+'pt'}</span>`;}
 
@@ -579,6 +596,10 @@ function renderKid(){
   document.getElementById('kid-streak').textContent=k.streak;
   document.getElementById('kid-solat-streak').textContent=k.solatStreak||0;
   document.getElementById('kid-pts').textContent=k.pts;
+  document.getElementById('kid-month-pts').textContent=k.monthPts||0;
+  document.getElementById('kid-total-pts').textContent=calcTotalEarned(kidIdx);
+  const mn=new Date().toLocaleString('default',{month:'short'});
+  document.getElementById('kid-month-label').textContent=mn+' earned';
   const done=tasks.filter(t=>t.done).length;
   document.getElementById('kid-prog').textContent=done+'/'+tasks.length;
   // banners
@@ -693,6 +714,7 @@ function updateRedeemBadge(){
 function approveRedeem(idx){
   const req=S.redemptions[idx],r=S.rewards[req.rewardIdx];if(!r)return;
   const half=Math.ceil(r.c/2);
+  // deduct from pts (balance) only — monthPts tracks total earned for Battle, never deducted
   if(req.joint){S.kids[req.kidIdx].pts=Math.max(0,S.kids[req.kidIdx].pts-half);S.kids[req.jointKidIdx].pts=Math.max(0,S.kids[req.jointKidIdx].pts-half);}
   else S.kids[req.kidIdx].pts=Math.max(0,S.kids[req.kidIdx].pts-r.c);
   req.status='approved';req.resolvedAt=new Date().toISOString();
@@ -966,7 +988,7 @@ function parentGrantReward(){
   if(isNaN(ri)||!S.rewards[ri]){toast('Select a reward');return;}
   const r=S.rewards[ri],k=S.kids[histKid];
   if(k.pts<r.c){toast('Not enough points ('+k.pts+'/'+r.c+')');return;}
-  k.pts=Math.max(0,k.pts-r.c);k.monthPts=Math.max(0,(k.monthPts||0)-r.c);
+  k.pts=Math.max(0,k.pts-r.c); // deduct from balance only, not monthPts
   S.redemptions.push({id:Date.now(),rewardIdx:ri,kidIdx:histKid,joint:false,status:'approved',parentGranted:true,createdAt:new Date(histEditDate).toISOString(),resolvedAt:new Date().toISOString()});
   sel.value='';save();toast(r.t+' granted! -'+r.c+' pts ☁️');
 }
@@ -991,10 +1013,13 @@ function recalcStreaks(){
 
 // ── BATTLE ──
 function renderBattle(){
-  const k0=S.kids[0],k1=S.kids[1],max=Math.max(k0.monthPts||1,k1.monthPts||1,1);
+  const k0=S.kids[0],k1=S.kids[1];
+  const t0=calcTotalEarned(0),t1=calcTotalEarned(1);
+  const max=Math.max(k0.monthPts||1,k1.monthPts||1,1);
   const w0=Math.round(((k0.monthPts||0)/max)*100),w1=Math.round(((k1.monthPts||0)/max)*100);
   const lead=k0.monthPts>k1.monthPts?0:k1.monthPts>k0.monthPts?1:-1;
-  document.getElementById('battle-content').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"><div style="text-align:center;padding:12px;background:${lead===0?'#FFF9E6':'#F8F7F4'};border-radius:12px;border:${lead===0?'2px solid #EF9F27':'0.5px solid #E8E6DF'}"><div style="font-size:22px">🌙</div><div style="font-weight:700;font-size:13px">${k0.name}</div><div style="font-size:22px;font-weight:800;color:#FF6B6B">${k0.monthPts||0}</div><div class="muted" style="font-size:11px">🤲 ${k0.solatStreak||0} solat streak</div>${lead===0?'<div style="font-size:11px;font-weight:700;color:#854F0B;margin-top:4px">👑 Leading</div>':''}</div><div style="text-align:center;padding:12px;background:${lead===1?'#FFF9E6':'#F8F7F4'};border-radius:12px;border:${lead===1?'2px solid #EF9F27':'0.5px solid #E8E6DF'}"><div style="font-size:22px">🌸</div><div style="font-weight:700;font-size:13px">${k1.name}</div><div style="font-size:22px;font-weight:800;color:#7F77DD">${k1.monthPts||0}</div><div class="muted" style="font-size:11px">🤲 ${k1.solatStreak||0} solat streak</div>${lead===1?'<div style="font-size:11px;font-weight:700;color:#854F0B;margin-top:4px">👑 Leading</div>':''}</div></div><div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:12px;font-weight:700;color:#888780">🌙 ${k0.name}</span><span style="font-size:12px;color:#888780">${k0.monthPts||0} pts</span></div><div style="background:#E8E6DF;border-radius:6px;height:10px;overflow:hidden"><div style="width:${w0}%;background:#FF6B6B;height:10px;border-radius:6px"></div></div></div><div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:12px;font-weight:700;color:#888780">🌸 ${k1.name}</span><span style="font-size:12px;color:#888780">${k1.monthPts||0} pts</span></div><div style="background:#E8E6DF;border-radius:6px;height:10px;overflow:hidden"><div style="width:${w1}%;background:#7F77DD;height:10px;border-radius:6px"></div></div></div><div style="background:#F8F7F4;border-radius:10px;padding:10px;text-align:center;font-size:12px;color:#888780">Winner gets <strong>+20 pts</strong> at month end 🏆</div>`;
+  const mn=new Date().toLocaleString('default',{month:'long'});
+  document.getElementById('battle-content').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"><div style="text-align:center;padding:12px;background:${lead===0?'#FFF9E6':'#F8F7F4'};border-radius:12px;border:${lead===0?'2px solid #EF9F27':'0.5px solid #E8E6DF'}"><div style="font-size:22px">🌙</div><div style="font-weight:700;font-size:13px">${k0.name}</div><div style="font-size:22px;font-weight:800;color:#FF6B6B">${k0.monthPts||0}</div><div class="muted" style="font-size:10px">${mn} earned</div><div class="muted" style="font-size:10px;margin-top:2px">💰 ${k0.pts} balance · ⭐ ${t0} all time</div><div class="muted" style="font-size:10px">🤲 ${k0.solatStreak||0} solat streak</div>${lead===0?'<div style="font-size:11px;font-weight:700;color:#854F0B;margin-top:4px">👑 Leading</div>':''}</div><div style="text-align:center;padding:12px;background:${lead===1?'#FFF9E6':'#F8F7F4'};border-radius:12px;border:${lead===1?'2px solid #EF9F27':'0.5px solid #E8E6DF'}"><div style="font-size:22px">🌸</div><div style="font-weight:700;font-size:13px">${k1.name}</div><div style="font-size:22px;font-weight:800;color:#7F77DD">${k1.monthPts||0}</div><div class="muted" style="font-size:10px">${mn} earned</div><div class="muted" style="font-size:10px;margin-top:2px">💰 ${k1.pts} balance · ⭐ ${t1} all time</div><div class="muted" style="font-size:10px">🤲 ${k1.solatStreak||0} solat streak</div>${lead===1?'<div style="font-size:11px;font-weight:700;color:#854F0B;margin-top:4px">👑 Leading</div>':''}</div></div><div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:12px;font-weight:700;color:#888780">🌙 ${k0.name}</span><span style="font-size:12px;color:#888780">${k0.monthPts||0} pts</span></div><div style="background:#E8E6DF;border-radius:6px;height:10px;overflow:hidden"><div style="width:${w0}%;background:#FF6B6B;height:10px;border-radius:6px"></div></div></div><div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:12px;font-weight:700;color:#888780">🌸 ${k1.name}</span><span style="font-size:12px;color:#888780">${k1.monthPts||0} pts</span></div><div style="background:#E8E6DF;border-radius:6px;height:10px;overflow:hidden"><div style="width:${w1}%;background:#7F77DD;height:10px;border-radius:6px"></div></div></div><div style="background:#F8F7F4;border-radius:10px;padding:10px;text-align:center;font-size:12px;color:#888780">Winner gets <strong>+20 pts</strong> at month end 🏆</div>`;
 }
 
 // ── AWARDS ──
@@ -1035,7 +1060,7 @@ function givePunish(){
   if(type==='deduct'){
     const pts=parseInt(document.getElementById('punish-pts').value);
     if(isNaN(pts)||pts<=0){toast('Enter valid points');return;}
-    k.pts=Math.max(0,k.pts-pts);k.monthPts=Math.max(0,(k.monthPts||0)-pts);
+    k.pts=Math.max(0,k.pts-pts); // deduct from balance only, not monthPts
     const entry={id:Date.now(),kidIdx:punishKid2,type:'deduct',reason,date,pts,addedAt:new Date().toISOString()};
     S.punishLog.push(entry);
     const dk=new Date(date).toDateString();
@@ -1066,7 +1091,7 @@ function renderPunishList(){
 function removePunish(i){
   if(!confirm('Remove punishment? Points restored if deduction.'))return;
   const p=S.punishLog[i],k=S.kids[p.kidIdx];
-  if(p.type==='deduct'){k.pts+=p.pts;k.monthPts=(k.monthPts||0)+p.pts;}
+  if(p.type==='deduct'){k.pts+=p.pts;} // restore balance only
   const dk=new Date(p.date).toDateString();
   if(k.history[dk]&&k.history[dk].punishments){const pi=k.history[dk].punishments.findIndex(x=>x.reason===p.reason&&x.type===p.type);if(pi>=0)k.history[dk].punishments.splice(pi,1);}
   S.punishLog.splice(i,1);save();renderPunishList();toast('Removed'+(p.type==='deduct'?', points restored':''));
@@ -1136,7 +1161,8 @@ function renderRedeemPanel(){
 
 // ── REPORTS ──
 function renderReports(){
-  document.getElementById('report-stats').innerHTML=S.kids.map(k=>`<div style="background:#F8F7F4;border-radius:12px;padding:12px;text-align:center"><div style="font-weight:700;font-size:14px">${k.name}</div><div style="font-size:22px;font-weight:800;color:#FF6B6B">${k.pts}</div><div class="muted" style="font-size:11px">total pts</div><div style="font-size:14px;font-weight:800;color:#7F77DD;margin-top:4px">${k.monthPts||0}</div><div class="muted" style="font-size:11px">this month</div><div style="font-weight:700;color:#FF6B6B;margin-top:4px">🔥 ${k.streak} streak</div><div style="font-weight:700;color:#1D9E75;margin-top:2px">🤲 ${k.solatStreak||0} solat</div><div class="muted" style="font-size:11px">🏆 ${k.monthWins||0} wins</div></div>`).join('');
+  const mn2=new Date().toLocaleString('default',{month:'long'});
+  document.getElementById('report-stats').innerHTML=S.kids.map((k,ki)=>{const te=calcTotalEarned(ki);return `<div style="background:#F8F7F4;border-radius:12px;padding:12px;text-align:center"><div style="font-weight:700;font-size:14px">${k.name}</div><div style="font-size:11px;font-weight:700;color:#888780;margin-top:6px">💰 BALANCE</div><div style="font-size:20px;font-weight:800;color:#FF6B6B">${k.pts}</div><div style="font-size:11px;font-weight:700;color:#888780;margin-top:6px">📅 ${mn2.toUpperCase()} EARNED</div><div style="font-size:20px;font-weight:800;color:#7F77DD">${k.monthPts||0}</div><div style="font-size:11px;font-weight:700;color:#888780;margin-top:6px">⭐ ALL TIME</div><div style="font-size:20px;font-weight:800;color:#633806">${te}</div><div style="margin-top:8px"><div style="font-weight:700;color:#FF6B6B;font-size:12px">🔥 ${k.streak} streak</div><div style="font-weight:700;color:#1D9E75;font-size:12px">🤲 ${k.solatStreak||0} solat</div><div class="muted" style="font-size:11px">🏆 ${k.monthWins||0} wins</div></div></div>`}).join('');
   document.getElementById('report-badges').innerHTML=S.kids.map(k=>`<div style="margin-bottom:10px"><div style="font-weight:700;margin-bottom:4px">${k.name} — badges</div><div>${k.badges.map(bid=>{const b=BADGES.find(x=>x.id===bid);return b?`<span style="margin-right:6px;font-size:13px">${b.icon} ${b.name}</span>`:''}).join('')||'<span class="muted">None yet</span>'}</div></div>`).join('');
 }
 function downloadReport(){
